@@ -4,10 +4,7 @@ import time
 from logging import getLogger
 from typing import Type
 from pydantic import BaseModel, ValidationError
-from google import genai
-from google.genai import types
 from app.config import get_settings
-from app.services.ai.retry import retry_decor
 
 # If primary model exceeds this, immediately fall back to FALLBACK_MODEL.
 PRIMARY_TIMEOUT_SECONDS = 60
@@ -59,11 +56,32 @@ async def _log_request(
         logger.debug("Failed to persist LLMRequest row", exc_info=True)
 
 
-class GeminiInference:
-    def __init__(self, model_name: str | None = None):
-        settings = get_settings()
-        self.model = model_name or settings.GEMINI_FLASH_MODEL
-        self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
+class InferenceService:
+    """Orchestrates LLM inference with retry, schema validation, and logging.
+
+    When constructed with a provider, delegates generate() to it.
+    When constructed without one (or with just a model_name), falls back to
+    the legacy GeminiProvider path for backward compatibility.
+    """
+
+    def __init__(
+        self,
+        model_name: str | None = None,
+        *,
+        provider: "LLMProvider | None" = None,
+    ):
+        from app.services.ai.providers.base import LLMProvider as _LLM
+
+        if provider:
+            self.provider: _LLM = provider
+            self.model = getattr(provider, "model_id", model_name or "unknown")
+        else:
+            # Legacy path: construct a GeminiProvider from settings
+            settings = get_settings()
+            model = model_name or settings.GEMINI_FLASH_MODEL
+            from app.services.ai.providers.gemini import GeminiProvider
+            self.provider = GeminiProvider(api_key=settings.GEMINI_API_KEY, model_id=model)
+            self.model = model
 
     def parse_output(
         self,
@@ -93,94 +111,6 @@ class GeminiInference:
             ]
         return structured_output_schema.model_validate(parsed_content).model_dump()
 
-    async def _call_api(
-        self,
-        model: str,
-        config_params: dict,
-        inputs: list | None,
-        *,
-        timeout: int | None = None,
-        user_id: str | None = None,
-        purpose: str | None = None,
-        reference_id: str | None = None,
-    ):
-        """Single Gemini API call with optional timeout. Returns the raw response."""
-        t0 = time.monotonic()
-        try:
-            coro = self.client.aio.models.generate_content(
-                model=model,
-                config=types.GenerateContentConfig(**config_params),
-                contents=inputs,
-            )
-            if timeout:
-                response = await asyncio.wait_for(coro, timeout=timeout)
-            else:
-                response = await coro
-        except asyncio.TimeoutError:
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            logger.warning(
-                f"TIMEOUT after {elapsed_ms}ms (limit={timeout}s): "
-                f"model={model}, purpose={purpose}"
-            )
-            await _log_request(
-                model_name=model, user_id=user_id, purpose=purpose,
-                reference_id=reference_id, input_tokens=0, output_tokens=0,
-                total_tokens=0, cached_tokens=0, response_time_ms=elapsed_ms,
-                success=False, error_message=f"Timeout after {timeout}s",
-            )
-            raise
-        except Exception as exc:
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            await _log_request(
-                model_name=model, user_id=user_id, purpose=purpose,
-                reference_id=reference_id, input_tokens=0, output_tokens=0,
-                total_tokens=0, cached_tokens=0, response_time_ms=elapsed_ms,
-                success=False, error_message=str(exc)[:500],
-            )
-            raise
-
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-        usage = getattr(response, "usage_metadata", None)
-        input_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
-        output_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
-        total_tokens = getattr(usage, "total_token_count", 0) if usage else 0
-        cached_tokens = getattr(usage, "cached_content_token_count", 0) if usage else 0
-
-        log_fn = logger.warning if elapsed_ms > 60000 else logger.info
-        log_fn(
-            f"Inference complete: model={model}, "
-            f"tokens={input_tokens}/{output_tokens}/{total_tokens}, "
-            f"time={elapsed_ms}ms, purpose={purpose}"
-            f"{' (SLOW >60s)' if elapsed_ms > 60000 else ''}"
-        )
-
-        await _log_request(
-            model_name=model, user_id=user_id, purpose=purpose,
-            reference_id=reference_id, input_tokens=input_tokens,
-            output_tokens=output_tokens, total_tokens=total_tokens,
-            cached_tokens=cached_tokens, response_time_ms=elapsed_ms,
-            success=True, error_message=None,
-        )
-
-        return response
-
-    @retry_decor(retries=3, backoff_base=1.0)
-    async def _call_api_with_retry(
-        self,
-        model: str,
-        config_params: dict,
-        inputs: list | None,
-        *,
-        user_id: str | None = None,
-        purpose: str | None = None,
-        reference_id: str | None = None,
-    ):
-        """Gemini API call with retry (no timeout — used for fallback model)."""
-        return await self._call_api(
-            model, config_params, inputs,
-            user_id=user_id, purpose=purpose, reference_id=reference_id,
-        )
-
     async def run_inference(
         self,
         system_prompt: str,
@@ -196,72 +126,67 @@ class GeminiInference:
         fallback_model: str | None = FALLBACK_MODEL,
         primary_timeout: int | None = PRIMARY_TIMEOUT_SECONDS,
     ) -> str | dict | list:
-        config_params: dict = {
-            "system_instruction": system_prompt,
-            "temperature": temperature,
-        }
+        call_kwargs = dict(
+            system_prompt=system_prompt,
+            inputs=inputs or [],
+            structured_output_schema=structured_output_schema,
+            temperature=temperature,
+            timeout=primary_timeout,
+        )
 
-        # Constrain thinking to reduce Gemini 3 preview latency spikes
-        if thinking_level:
-            config_params["thinking_config"] = types.ThinkingConfig(
-                thinking_level=thinking_level,
-            )
+        t0 = time.monotonic()
 
-        if structured_output_schema:
-            config_params["response_mime_type"] = "application/json"
-            if isinstance(structured_output_schema, type) and issubclass(
-                structured_output_schema, BaseModel
-            ):
-                config_params["response_schema"] = structured_output_schema
-
-        call_kwargs = dict(user_id=user_id, purpose=purpose, reference_id=reference_id)
-
-        async def _get_response():
-            """Primary → retry → fallback flow."""
-            # Strip thinking_config for fallback — Gemini 2.5 uses thinking_budget,
-            # not thinking_level; passing the wrong one may cause an API error.
-            fallback_params = {k: v for k, v in config_params.items() if k != "thinking_config"}
-
+        async def _generate_with_fallback() -> str:
             try:
-                return await self._call_api(
-                    self.model, config_params, inputs,
-                    timeout=primary_timeout, **call_kwargs,
-                )
+                return await self.provider.generate(**call_kwargs)
             except asyncio.TimeoutError:
                 if not fallback_model or fallback_model == self.model:
                     raise
                 logger.warning(
-                    f"Primary model {self.model} timed out at {primary_timeout}s, "
-                    f"falling back to {fallback_model}"
+                    f"Primary model {self.model} timed out, falling back to {fallback_model}"
                 )
-                return await self._call_api_with_retry(
-                    fallback_model, fallback_params, inputs, **call_kwargs,
-                )
+                from app.services.ai.providers.gemini import GeminiProvider
+                if not isinstance(self.provider, GeminiProvider):
+                    raise  # BYOK non-Gemini — no cross-provider fallback
+                settings = get_settings()
+                fb_provider = GeminiProvider(api_key=settings.GEMINI_API_KEY, model_id=fallback_model)
+                fb_kwargs = {**call_kwargs, "timeout": None}
+                return await fb_provider.generate(**fb_kwargs)
             except Exception:
-                # Non-timeout errors (429, 503, network): retry with primary model first
-                try:
-                    return await self._call_api_with_retry(
-                        self.model, config_params, inputs, **call_kwargs,
-                    )
-                except Exception:
-                    # Primary retries exhausted — fall back
-                    if not fallback_model or fallback_model == self.model:
-                        raise
-                    logger.warning(
-                        f"Primary model {self.model} retries exhausted, "
-                        f"falling back to {fallback_model}"
-                    )
-                    return await self._call_api_with_retry(
-                        fallback_model, fallback_params, inputs, **call_kwargs,
-                    )
+                if not fallback_model or fallback_model == self.model:
+                    raise
+                from app.services.ai.providers.gemini import GeminiProvider
+                if not isinstance(self.provider, GeminiProvider):
+                    raise  # BYOK non-Gemini — no cross-provider fallback
+                logger.warning(
+                    f"Primary model {self.model} failed, falling back to {fallback_model}"
+                )
+                settings = get_settings()
+                fb_provider = GeminiProvider(api_key=settings.GEMINI_API_KEY, model_id=fallback_model)
+                fb_kwargs = {**call_kwargs, "timeout": None}
+                return await fb_provider.generate(**fb_kwargs)
 
-        # Retry on schema validation failures — the AI returned valid JSON but it
-        # doesn't conform to the Pydantic schema. Re-calling gives the model a
-        # fresh chance to produce valid output.
         max_validation_retries = 2
         for attempt in range(1 + max_validation_retries):
-            response = await _get_response()
-            response_str: str = response.text.strip()
+            try:
+                response_str = await _generate_with_fallback()
+            except Exception as exc:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                await _log_request(
+                    model_name=self.model, user_id=user_id, purpose=purpose,
+                    reference_id=reference_id, input_tokens=0, output_tokens=0,
+                    total_tokens=0, cached_tokens=0, response_time_ms=elapsed_ms,
+                    success=False, error_message=str(exc)[:500],
+                )
+                raise
+
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            await _log_request(
+                model_name=self.model, user_id=user_id, purpose=purpose,
+                reference_id=reference_id, input_tokens=0, output_tokens=0,
+                total_tokens=0, cached_tokens=0, response_time_ms=elapsed_ms,
+                success=True, error_message=None,
+            )
 
             if not structured_output_schema:
                 return response_str
@@ -279,3 +204,7 @@ class GeminiInference:
                 logger.warning(
                     f"Schema validation failed (attempt {attempt + 1}), retrying: {e}"
                 )
+
+
+# Backward compatibility alias
+GeminiInference = InferenceService
