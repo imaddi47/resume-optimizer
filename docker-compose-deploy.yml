@@ -10,7 +10,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
   app:
-    image: imaddi47/resume-optimizer:latest
+    image: imaddi47/resume-optimizer:multi-arch-v2
     # ports:
     #   - "8080:8080"
     env_file:
