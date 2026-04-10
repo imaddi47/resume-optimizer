@@ -70,8 +70,6 @@ class OpenAIProvider(LLMProvider):
             "messages": messages,
             "temperature": temperature,
         }
-        if timeout:
-            kwargs["timeout"] = timeout
 
         if structured_output_schema:
             try:
@@ -87,13 +85,23 @@ class OpenAIProvider(LLMProvider):
                 messages[0]["content"] += _schema_to_json_instruction(structured_output_schema)
 
         try:
-            response = await self.client.chat.completions.create(**kwargs)
-            return response.choices[0].message.content.strip()
+            response = await self.client.chat.completions.create(
+                **kwargs, timeout=timeout if timeout else openai.NOT_GIVEN,
+            )
+            text = response.choices[0].message.content
+            if not text or not text.strip():
+                raise ProviderError(
+                    f"Model {self.model_id} returned empty response. "
+                    "Try a different model."
+                )
+            return text.strip()
         except openai.AuthenticationError as e:
             raise ProviderAuthError(f"OpenAI authentication failed: {e}") from e
         except openai.RateLimitError as e:
             raise ProviderRateLimitError(f"OpenAI rate limit: {e}") from e
         except openai.NotFoundError as e:
             raise ProviderModelError(f"OpenAI model not found: {e}") from e
+        except ProviderError:
+            raise
         except Exception as e:
             raise ProviderError(f"OpenAI error: {e}") from e

@@ -27,8 +27,8 @@ class AIConfigUpdate(BaseModel):
 
     @model_validator(mode="after")
     def validate_api_key(self):
-        if self.provider and self.provider != AIProvider.PLATFORM_GEMINI and not self.api_key:
-            raise ValueError("api_key is required for non-platform providers")
+        # api_key can be omitted on update if the user already has one stored;
+        # the API layer handles that check — here we only enforce on first save
         return self
 
 

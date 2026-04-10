@@ -65,15 +65,23 @@ class OpenAICompatibleProvider(LLMProvider):
             ],
             "temperature": temperature,
         }
-        if timeout:
-            kwargs["timeout"] = timeout
 
         try:
-            response = await self.client.chat.completions.create(**kwargs)
-            return response.choices[0].message.content.strip()
+            response = await self.client.chat.completions.create(
+                **kwargs, timeout=timeout if timeout else openai.NOT_GIVEN,
+            )
+            text = response.choices[0].message.content
+            if not text or not text.strip():
+                raise ProviderError(
+                    f"Model {self.model_id} returned empty response. "
+                    "Try a different model."
+                )
+            return text.strip()
         except openai.AuthenticationError as e:
             raise ProviderAuthError(f"Authentication failed: {e}") from e
         except openai.RateLimitError as e:
             raise ProviderRateLimitError(f"Rate limit: {e}") from e
+        except ProviderError:
+            raise
         except Exception as e:
             raise ProviderError(f"Provider error: {e}") from e

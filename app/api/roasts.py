@@ -50,18 +50,17 @@ async def upload_roast(
     # Fast text extraction
     extracted_text = await service.extract_text_fast(pdf_bytes)
 
-    # Query user's AI config
-    ai_config_result = await db.execute(
-        select(UserAIConfig).where(UserAIConfig.user_id == current_user.id)
-    )
-    ai_config = ai_config_result.scalar_one_or_none()
-
-    # Process in background
+    # Process in background — re-query ai_config in background session
     from app.database.session import async_session_factory
     roast_id = roast.id
+    user_id = current_user.id
 
     async def _process():
         async with async_session_factory() as bg_db:
+            ai_result = await bg_db.execute(
+                select(UserAIConfig).where(UserAIConfig.user_id == user_id)
+            )
+            ai_config = ai_result.scalar_one_or_none()
             await service.process_roast(bg_db, roast_id, pdf_bytes, extracted_text=extracted_text, ai_config=ai_config)
 
     create_tracked_task(_process())

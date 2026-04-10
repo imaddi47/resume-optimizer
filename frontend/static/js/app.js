@@ -83,7 +83,10 @@ const api = {
     let msg;
     try {
       const data = await res.json();
-      msg = data.detail || `HTTP ${res.status}`;
+      const d = data.detail;
+      if (typeof d === 'string') msg = d;
+      else if (Array.isArray(d)) msg = d.map(e => e.msg || JSON.stringify(e)).join('; ');
+      else msg = `HTTP ${res.status}`;
     } catch {
       msg = `HTTP ${res.status}`;
     }
@@ -4107,7 +4110,11 @@ const AISettingsPage = {
 
             <div v-if="form.provider !== 'PLATFORM_GEMINI'" class="mb-4">
               <label class="block text-[10px] font-mono font-bold tracking-widest uppercase mb-2" style="color:var(--text-dim)">API Key</label>
-              <input v-model="form.api_key" type="password" :placeholder="keyHint || 'Enter your API key'" class="input-field w-full">
+              <div v-if="keyHint && !changingKey" class="flex items-center gap-2">
+                <span class="input-field flex-1 opacity-60">{{ keyHint }}</span>
+                <button @click="changingKey = true" class="btn-secondary text-xs">Change</button>
+              </div>
+              <input v-else v-model="form.api_key" type="password" autocomplete="off" placeholder="Enter your API key" class="input-field w-full">
             </div>
 
             <div v-if="form.provider === 'CUSTOM_OPENAI_COMPATIBLE'" class="mb-4">
@@ -4160,6 +4167,7 @@ const AISettingsPage = {
     const error = ref('');
     const success = ref('');
     const keyHint = ref('');
+    const changingKey = ref(false);
 
     const load = async () => {
       try {
@@ -4180,6 +4188,7 @@ const AISettingsPage = {
       form.value.model_id = '';
       models.value = [];
       keyHint.value = '';
+      changingKey.value = false;
       error.value = '';
       success.value = '';
     };
@@ -4220,6 +4229,7 @@ const AISettingsPage = {
         await api.put('/settings/ai/', body);
         success.value = 'Settings saved!';
         form.value.api_key = '';
+        changingKey.value = false;
         await load();
       } catch (e) {
         error.value = e.message || 'Failed to save';
@@ -4247,7 +4257,7 @@ const AISettingsPage = {
 
     onMounted(load);
 
-    return { form, models, fetchingModels, saving, error, success, keyHint, onProviderChange, fetchModels, save, reset };
+    return { form, models, fetchingModels, saving, error, success, keyHint, changingKey, onProviderChange, fetchModels, save, reset };
   },
 };
 

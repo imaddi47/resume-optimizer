@@ -61,17 +61,25 @@ class AnthropicProvider(LLMProvider):
             "messages": [{"role": "user", "content": "\n".join(user_parts)}],
             "temperature": temperature,
         }
-        if timeout:
-            kwargs["timeout"] = timeout
 
         try:
-            response = await self.client.messages.create(**kwargs)
-            return response.content[0].text.strip()
+            response = await self.client.messages.create(
+                **kwargs, timeout=timeout if timeout else anthropic.NOT_GIVEN,
+            )
+            text = response.content[0].text if response.content else None
+            if not text or not text.strip():
+                raise ProviderError(
+                    f"Model {self.model_id} returned empty response. "
+                    "Try a different model."
+                )
+            return text.strip()
         except anthropic.AuthenticationError as e:
             raise ProviderAuthError(f"Anthropic authentication failed: {e}") from e
         except anthropic.RateLimitError as e:
             raise ProviderRateLimitError(f"Anthropic rate limit: {e}") from e
         except anthropic.NotFoundError as e:
             raise ProviderModelError(f"Anthropic model not found: {e}") from e
+        except ProviderError:
+            raise
         except Exception as e:
             raise ProviderError(f"Anthropic error: {e}") from e

@@ -108,18 +108,17 @@ async def generate_resume(
     job.status = JobStatus.GENERATING_RESUME
     await db.commit()
 
-    # Query user's AI config before dispatching background task
-    ai_config_result = await db.execute(
-        select(UserAIConfig).where(UserAIConfig.user_id == current_user.id)
-    )
-    ai_config = ai_config_result.scalar_one_or_none()
-
     from app.database.session import async_session_factory
 
     user_id = current_user.id
 
     async def _generate():
         async with async_session_factory() as bg_db:
+            # Re-query ai_config in background session to get latest settings
+            ai_result = await bg_db.execute(
+                select(UserAIConfig).where(UserAIConfig.user_id == user_id)
+            )
+            ai_config = ai_result.scalar_one_or_none()
             phase1_succeeded = False
             try:
                 await service.generate_custom_resume(bg_db, job_id, user_id, ai_config=ai_config)

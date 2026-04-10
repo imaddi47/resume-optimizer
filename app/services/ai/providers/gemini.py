@@ -67,7 +67,13 @@ class GeminiProvider(LLMProvider):
             else:
                 response = await coro
 
-            return response.text.strip()
+            text = response.text
+            if not text or not text.strip():
+                raise ProviderError(
+                    f"Gemini model {self.model_id} returned empty response. "
+                    "Try a different model (e.g. gemini-2.5-flash)."
+                )
+            return text.strip()
 
         except asyncio.TimeoutError:
             raise

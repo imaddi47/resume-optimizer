@@ -95,6 +95,9 @@ async def save_ai_config(
         elif payload.provider == AIProvider.PLATFORM_GEMINI:
             config.api_key_encrypted = None
     else:
+        if payload.provider != AIProvider.PLATFORM_GEMINI and not encrypted_key:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=422, detail="API key is required for non-platform providers")
         config = UserAIConfig(
             user_id=current_user.id,
             provider=payload.provider,
@@ -127,11 +130,27 @@ async def delete_ai_config(
 @router.post("/models")
 async def fetch_models(
     payload: FetchModelsRequest,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ModelInfoResponse]:
+    api_key = payload.api_key
+    api_host = payload.api_host
+
+    # Fall back to stored key/host if not provided in request
+    if not api_key or not api_host:
+        result = await db.execute(
+            select(UserAIConfig).where(UserAIConfig.user_id == current_user.id)
+        )
+        config = result.scalar_one_or_none()
+        if config:
+            if not api_key and config.api_key_encrypted:
+                api_key = config.decrypted_api_key
+            if not api_host and config.api_host:
+                api_host = config.api_host
+
     models = await _fetch_models_for_provider(
         provider=payload.provider,
-        api_key=payload.api_key,
-        api_host=payload.api_host,
+        api_key=api_key,
+        api_host=api_host,
     )
     return [ModelInfoResponse(**m) for m in models]

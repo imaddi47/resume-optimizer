@@ -28,21 +28,21 @@ async def upload_profile(
     pdf_bytes = await file.read()
     profile_id = await service.create_profile(db, current_user.id, pdf_bytes)
 
-    # Query user's AI config
-    ai_config_result = await db.execute(
-        select(UserAIConfig).where(UserAIConfig.user_id == current_user.id)
-    )
-    ai_config = ai_config_result.scalar_one_or_none()
-
     # Fast-path: extract text immediately (pdfplumber is near-instant)
     # so the frontend can animate through the content while AI structures in background
     extracted_text = await service.extract_text_fast(pdf_bytes)
 
-    # Process in background — pass extracted text so it doesn't re-extract
+    # Process in background — re-query ai_config in background session
+    # to avoid passing a detached ORM object across sessions
     from app.database.session import async_session_factory
+    user_id = current_user.id
 
     async def _process():
         async with async_session_factory() as bg_db:
+            ai_result = await bg_db.execute(
+                select(UserAIConfig).where(UserAIConfig.user_id == user_id)
+            )
+            ai_config = ai_result.scalar_one_or_none()
             await service.process_profile(bg_db, profile_id, pdf_bytes, extracted_text=extracted_text, ai_config=ai_config)
 
     create_tracked_task(_process())
