@@ -6,7 +6,8 @@ from sqlalchemy import select, func
 from app.models.profile import Profile, ProfileStatus
 from app.schemas.resume import ResumeInfo
 from app.services.ocr.extractor import PDFExtractor
-from app.services.ai.inference import GeminiInference
+from app.services.ai.inference import InferenceService
+from app.services.ai.providers import get_provider
 from app.services.ai.prompts import STRUCTURED_RESUME_SYSTEM_PROMPT, ENHANCED_RESUME_SYSTEM_PROMPT
 from app.config import get_settings
 from app.exceptions import ProfileNotFoundError
@@ -41,7 +42,7 @@ class ProfileService:
             return ""
 
     async def process_profile(
-        self, db: AsyncSession, profile_id: int, pdf_bytes: bytes, extracted_text: str = ""
+        self, db: AsyncSession, profile_id: int, pdf_bytes: bytes, extracted_text: str = "", ai_config=None
     ) -> None:
         """Background task: extract text (if not provided), structure via AI, update profile."""
         t_start = time.monotonic()
@@ -68,15 +69,31 @@ class ProfileService:
 
             t0 = time.monotonic()
             if needs_vision:
-                logger.info(f"[profile:{profile_id}] Using vision path (text_len={len(text.strip())}, high_non_ascii={self.extractor._has_high_non_ascii_ratio(text)})")
-                result = await self.extractor.extract_and_structure_via_vision(
-                    pdf_bytes,
-                    user_id=profile.user_id,
-                    reference_id=str(profile_id),
-                )
+                from app.services.ai.providers.gemini import GeminiProvider
+                provider = get_provider(ai_config, purpose="profile_structuring")
+                if isinstance(provider, GeminiProvider):
+                    logger.info(f"[profile:{profile_id}] Using vision path")
+                    result = await self.extractor.extract_and_structure_via_vision(
+                        pdf_bytes,
+                        user_id=profile.user_id,
+                        reference_id=str(profile_id),
+                    )
+                else:
+                    logger.info(f"[profile:{profile_id}] Non-Gemini provider, using text path for vision-needed PDF")
+                    if not text.strip():
+                        text = "(No text could be extracted from this PDF)"
+                    llm = InferenceService(provider=provider)
+                    result = await llm.run_inference(
+                        system_prompt=STRUCTURED_RESUME_SYSTEM_PROMPT,
+                        inputs=[text],
+                        structured_output_schema=ResumeInfo,
+                        user_id=profile.user_id,
+                        purpose="profile_structuring",
+                        reference_id=str(profile_id),
+                    )
             else:
                 logger.info(f"[profile:{profile_id}] Using text path → AI structuring")
-                llm = GeminiInference(model_name=self.flash_model)
+                llm = InferenceService(provider=get_provider(ai_config, purpose="profile_structuring"))
                 result = await llm.run_inference(
                     system_prompt=STRUCTURED_RESUME_SYSTEM_PROMPT,
                     inputs=[text],
@@ -143,9 +160,9 @@ class ProfileService:
         await db.refresh(profile)
         return profile
 
-    async def enhance_profile(self, db: AsyncSession, profile_id: int, user_id: str) -> Profile:
+    async def enhance_profile(self, db: AsyncSession, profile_id: int, user_id: str, ai_config=None) -> Profile:
         profile = await self.get_profile(db, profile_id, user_id)
-        llm = GeminiInference(model_name=self.flash_model)
+        llm = InferenceService(provider=get_provider(ai_config, purpose="profile_enhancement"))
         result = await llm.run_inference(
             system_prompt=ENHANCED_RESUME_SYSTEM_PROMPT,
             inputs=[json.dumps(profile.resume_info or {})],

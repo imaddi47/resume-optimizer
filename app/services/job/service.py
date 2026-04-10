@@ -8,7 +8,8 @@ from app.models.job import Job, JobStatus
 from app.models.profile import Profile, ProfileStatus
 from app.schemas.custom_resume import CustomResumeInfo
 from app.schemas.job import JobDescription
-from app.services.ai.inference import GeminiInference
+from app.services.ai.inference import InferenceService
+from app.services.ai.providers import get_provider
 from app.services.ai.prompts import CUSTOM_RESUME_SYSTEM_PROMPT, CUSTOM_RESUME_USER_PROMPT
 from app.services.latex.builder import build_resume
 from app.services.latex.compiler import compile_latex
@@ -95,7 +96,7 @@ class JobService:
         await db.refresh(job)
         return job
 
-    async def generate_custom_resume(self, db: AsyncSession, job_id: int, user_id: str) -> None:
+    async def generate_custom_resume(self, db: AsyncSession, job_id: int, user_id: str, ai_config=None) -> None:
         """Phase 1: AI generates CustomResumeInfo from profile + job description."""
         t_start = time.monotonic()
         try:
@@ -115,7 +116,7 @@ class JobService:
             )
 
             t0 = time.monotonic()
-            llm = GeminiInference(model_name=self.pro_model)
+            llm = InferenceService(provider=get_provider(ai_config, purpose="resume_tailoring"))
             result = await llm.run_inference(
                 system_prompt=CUSTOM_RESUME_SYSTEM_PROMPT,
                 inputs=[user_prompt],
