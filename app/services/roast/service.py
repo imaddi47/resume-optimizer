@@ -15,7 +15,8 @@ from app.config import get_settings
 from app.exceptions import RoastNotFoundError
 from app.models.roast import Roast, RoastStatus
 from app.schemas.roast import RoastResult
-from app.services.ai.inference import GeminiInference
+from app.services.ai.inference import InferenceService
+from app.services.ai.providers import get_provider
 from app.services.ai.prompts import ROAST_SYSTEM_PROMPT
 from app.services.ocr.extractor import PDFExtractor
 
@@ -76,7 +77,7 @@ class RoastService:
         return images
 
     async def process_roast(
-        self, db: AsyncSession, roast_id: int, pdf_bytes: bytes, extracted_text: str = ""
+        self, db: AsyncSession, roast_id: int, pdf_bytes: bytes, extracted_text: str = "", ai_config=None
     ) -> None:
         roast = await db.get(Roast, roast_id)
         if not roast:
@@ -97,7 +98,7 @@ class RoastService:
             images: list[dict[str, Any]] = await self.pdf_to_images(pdf_bytes)
 
             now: str = datetime.now(timezone.utc).strftime("%B %d, %Y")
-            llm: GeminiInference = GeminiInference(model_name=self.flash_model)
+            llm = InferenceService(provider=get_provider(ai_config, purpose="resume_roast"))
 
             user_message_parts: list[Any] = [
                 f"Today's date is {now}. Here is the resume to roast. Examine each page — look at both the content AND the formatting/layout.",

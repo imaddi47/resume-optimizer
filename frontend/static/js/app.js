@@ -951,6 +951,12 @@ const AppSidebar = {
             Credits
           </router-link>
         </div>
+        <div class="pt-4 mt-4 border-t border-white/5">
+          <router-link to="/settings/ai" class="sidebar-link" active-class="active">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+            AI Settings
+          </router-link>
+        </div>
         <div class="pt-4 mt-4 border-t border-white/5" v-if="auth.isSuperAdmin">
           <router-link to="/admin" class="sidebar-link" active-class="active">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
@@ -4073,6 +4079,178 @@ const AdminPage = {
   },
 };
 
+// ================================================================
+// PAGES — AI Settings
+// ================================================================
+const AISettingsPage = {
+  template: `
+    <div>
+      <TopHeader>
+        <template #left>
+          <div class="text-sm font-mono">
+            <span class="font-bold text-white">AI SETTINGS</span>
+            <p class="text-[10px] font-mono mt-0.5 hidden md:block" style="color:var(--text-dim)">Configure your AI provider and model</p>
+          </div>
+        </template>
+      </TopHeader>
+      <div class="flex-1 overflow-y-auto p-4 md:p-6 page-scroll">
+        <div class="max-w-lg mx-auto">
+          <div class="card p-6">
+            <label class="block text-[10px] font-mono font-bold tracking-widest uppercase mb-2" style="color:var(--text-dim)">Provider</label>
+            <select v-model="form.provider" @change="onProviderChange" class="input-field w-full mb-4">
+              <option value="PLATFORM_GEMINI">Platform Default (Gemini)</option>
+              <option value="GEMINI">Google Gemini (Own Key)</option>
+              <option value="OPENAI">OpenAI</option>
+              <option value="ANTHROPIC">Anthropic</option>
+              <option value="CUSTOM_OPENAI_COMPATIBLE">Custom (OpenAI-compatible)</option>
+            </select>
+
+            <div v-if="form.provider !== 'PLATFORM_GEMINI'" class="mb-4">
+              <label class="block text-[10px] font-mono font-bold tracking-widest uppercase mb-2" style="color:var(--text-dim)">API Key</label>
+              <input v-model="form.api_key" type="password" :placeholder="keyHint || 'Enter your API key'" class="input-field w-full">
+            </div>
+
+            <div v-if="form.provider === 'CUSTOM_OPENAI_COMPATIBLE'" class="mb-4">
+              <label class="block text-[10px] font-mono font-bold tracking-widest uppercase mb-2" style="color:var(--text-dim)">API Host</label>
+              <input v-model="form.api_host" type="text" placeholder="https://api.groq.com/openai/v1" class="input-field w-full">
+            </div>
+
+            <button @click="fetchModels" :disabled="fetchingModels" class="btn-secondary w-full mb-4">
+              {{ fetchingModels ? 'Fetching...' : 'Fetch Available Models' }}
+            </button>
+
+            <div class="mb-6">
+              <label class="block text-[10px] font-mono font-bold tracking-widest uppercase mb-2" style="color:var(--text-dim)">Model</label>
+              <select v-if="models.length > 0" v-model="form.model_id" class="input-field w-full">
+                <option v-for="m in models" :key="m.id" :value="m.id">{{ m.name || m.id }}</option>
+              </select>
+              <input v-else v-model="form.model_id" type="text" placeholder="Enter model ID" class="input-field w-full">
+            </div>
+
+            <div class="flex gap-3">
+              <button @click="save" :disabled="saving" class="btn-primary flex-1 justify-center">
+                {{ saving ? 'Saving...' : 'Save' }}
+              </button>
+              <button @click="reset" :disabled="saving" class="btn-secondary">
+                Reset to Default
+              </button>
+            </div>
+
+            <p v-if="error" class="text-red-400 text-xs mt-3 font-mono">{{ error }}</p>
+            <p v-if="success" class="text-green-400 text-xs mt-3 font-mono">{{ success }}</p>
+
+            <p class="text-[10px] font-mono mt-4" style="color:var(--text-dim)">
+              Your API key is encrypted at rest. Platform default uses our Gemini API.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  `,
+  setup() {
+    const form = ref({
+      provider: 'PLATFORM_GEMINI',
+      api_key: '',
+      api_host: '',
+      model_id: '',
+    });
+    const models = ref([]);
+    const fetchingModels = ref(false);
+    const saving = ref(false);
+    const error = ref('');
+    const success = ref('');
+    const keyHint = ref('');
+
+    const load = async () => {
+      try {
+        const resp = await api.get('/settings/ai/');
+        if (resp) {
+          form.value.provider = resp.provider;
+          form.value.model_id = resp.model_id;
+          form.value.api_host = resp.api_host || '';
+          form.value.api_key = '';
+          keyHint.value = resp.key_hint || '';
+        }
+      } catch {}
+    };
+
+    const onProviderChange = () => {
+      form.value.api_key = '';
+      form.value.api_host = '';
+      form.value.model_id = '';
+      models.value = [];
+      keyHint.value = '';
+      error.value = '';
+      success.value = '';
+    };
+
+    const fetchModels = async () => {
+      fetchingModels.value = true;
+      error.value = '';
+      try {
+        const body = {
+          provider: form.value.provider,
+          api_key: form.value.api_key || undefined,
+          api_host: form.value.api_host || undefined,
+        };
+        const resp = await api.post('/settings/ai/models', body);
+        models.value = resp || [];
+        if (models.value.length === 0) {
+          error.value = 'No models returned. You can type a model ID manually.';
+        }
+      } catch (e) {
+        error.value = e.message || 'Failed to fetch models';
+        models.value = [];
+      } finally {
+        fetchingModels.value = false;
+      }
+    };
+
+    const save = async () => {
+      saving.value = true;
+      error.value = '';
+      success.value = '';
+      try {
+        const body = {
+          provider: form.value.provider,
+          model_id: form.value.model_id,
+          api_key: form.value.api_key || undefined,
+          api_host: form.value.api_host || undefined,
+        };
+        await api.put('/settings/ai/', body);
+        success.value = 'Settings saved!';
+        form.value.api_key = '';
+        await load();
+      } catch (e) {
+        error.value = e.message || 'Failed to save';
+      } finally {
+        saving.value = false;
+      }
+    };
+
+    const reset = async () => {
+      saving.value = true;
+      error.value = '';
+      success.value = '';
+      try {
+        await api.del('/settings/ai/');
+        form.value = { provider: 'PLATFORM_GEMINI', api_key: '', api_host: '', model_id: '' };
+        models.value = [];
+        keyHint.value = '';
+        success.value = 'Reset to platform default.';
+      } catch (e) {
+        error.value = e.message || 'Failed to reset';
+      } finally {
+        saving.value = false;
+      }
+    };
+
+    onMounted(load);
+
+    return { form, models, fetchingModels, saving, error, success, keyHint, onProviderChange, fetchModels, save, reset };
+  },
+};
+
 const AppLayout = {
   components: { AppSidebar, ConfirmModal, PaywallModal },
   template: `
@@ -5291,6 +5469,7 @@ const routes = [
       { path: 'jobs/view', component: JobDetailPage },
       { path: 'roast', component: RoastPage },
       { path: 'credits', component: CreditHistoryPage },
+      { path: 'settings/ai', component: AISettingsPage },
       { path: 'admin', component: AdminPage, meta: { requiresSuperAdmin: true } },
     ],
   },

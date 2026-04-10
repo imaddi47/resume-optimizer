@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = ""  # ADK reads this env var for Google AI API auth
     GEMINI_FLASH_MODEL: str = "gemini-3-flash-preview"
     GEMINI_PRO_MODEL: str = "gemini-3.1-pro-preview"
+    ENCRYPTION_KEY: str = ""  # Fernet key for encrypting user API keys
 
     # Auth
     GOOGLE_CLIENT_ID: str = ""
@@ -41,7 +42,7 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:8000"
     DEV_AUTH_BYPASS: bool = False
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 @lru_cache
