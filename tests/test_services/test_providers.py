@@ -85,3 +85,37 @@ async def test_openai_provider_list_models():
         models = await provider.list_models()
         assert len(models) >= 1
         assert models[0].id == "gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_provider_generate():
+    with patch("app.services.ai.providers.anthropic_provider.anthropic") as mock_anthropic:
+        mock_client = AsyncMock()
+        mock_anthropic.AsyncAnthropic.return_value = mock_client
+
+        mock_block = MagicMock()
+        mock_block.text = '{"name": "Alice"}'
+        mock_response = MagicMock()
+        mock_response.content = [mock_block]
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        from app.services.ai.providers.anthropic_provider import AnthropicProvider
+
+        provider = AnthropicProvider(api_key="sk-ant-test", model_id="claude-sonnet-4-6")
+        result = await provider.generate(
+            system_prompt="Extract info",
+            inputs=["some text"],
+        )
+        assert result == '{"name": "Alice"}'
+
+
+@pytest.mark.asyncio
+async def test_anthropic_provider_list_models_returns_curated():
+    with patch("app.services.ai.providers.anthropic_provider.anthropic"):
+        from app.services.ai.providers.anthropic_provider import AnthropicProvider
+
+        provider = AnthropicProvider(api_key="sk-ant-test", model_id="claude-sonnet-4-6")
+        models = await provider.list_models()
+        assert len(models) >= 3
+        ids = [m.id for m in models]
+        assert "claude-sonnet-4-6" in ids
