@@ -6,6 +6,7 @@ from app.models.token_usage import LLMRequest
 from app.models.tenant import Tenant, TenantDomainRule
 from app.models.roast import Roast
 from app.models.roast_view import RoastView
+from app.models.ai_config import UserAIConfig, AIProvider
 from app.models.credit import (
     CreditPack, TimePassTier, UserCredit, UserTimePass,
     CreditTransaction, PromoCode, PromoRedemption,
@@ -18,4 +19,5 @@ __all__ = [
     "CreditPack", "TimePassTier", "UserCredit", "UserTimePass",
     "CreditTransaction", "PromoCode", "PromoRedemption",
     "TransactionType", "PromoType",
+    "UserAIConfig", "AIProvider",
 ]
