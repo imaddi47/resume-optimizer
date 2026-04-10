@@ -7,9 +7,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import update as sa_update
+from sqlalchemy import select
 from app.database.session import get_db, async_session_factory
 from app.models.user import User
 from app.models.profile import Profile, ProfileStatus
+from app.models.ai_config import UserAIConfig
 from app.dependencies import get_current_user
 from app.services.chat.profile_chat import ProfileChatService
 from app.services.profile.service import ProfileService
@@ -87,12 +89,18 @@ async def chat_with_profile(
     async def run_agent():
         try:
             async with async_session_factory() as task_db:
+                # Query user's AI config in background session
+                ai_result = await task_db.execute(
+                    select(UserAIConfig).where(UserAIConfig.user_id == _user_id)
+                )
+                _ai_config = ai_result.scalar_one_or_none()
                 try:
                     async for event_data in profile_chat_service.chat_stream(
                         profile_id=_profile_id,
                         user_id=_user_id,
                         message=_message,
                         current_profile=_current_profile,
+                        ai_config=_ai_config,
                     ):
                         if (event_data.get("type") == "response"
                                 and event_data.get("resume_modified")

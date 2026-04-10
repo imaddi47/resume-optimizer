@@ -157,8 +157,23 @@ class ProfileChatService:
         )
         self.flash_model = settings.GEMINI_FLASH_MODEL
 
-    def _build_agent(self, user_id: str, profile_id: int) -> Agent:
-        model_name = self.flash_model
+    def _resolve_model(self, ai_config) -> str:
+        """Pick the Gemini model for the ADK Agent.
+
+        ADK only supports Gemini. Use user's model if Gemini-based,
+        otherwise fall back to platform flash model.
+        """
+        if ai_config is None:
+            return self.flash_model
+        provider = ai_config.provider
+        if hasattr(provider, "value"):
+            provider = provider.value
+        if provider in ("PLATFORM_GEMINI", "GEMINI"):
+            return ai_config.model_id or self.flash_model
+        return self.flash_model
+
+    def _build_agent(self, user_id: str, profile_id: int, ai_config=None) -> Agent:
+        model_name = self._resolve_model(ai_config)
         _profile_id = profile_id
         _user_id = user_id
 
@@ -181,7 +196,7 @@ class ProfileChatService:
             return llm_response
 
         return Agent(
-            model=self.flash_model,
+            model=model_name,
             name="profile_editor",
             instruction=PROFILE_CHAT_SYSTEM_PROMPT,
             tools=[get_profile, edit_profile],
@@ -194,10 +209,11 @@ class ProfileChatService:
         user_id: str,
         message: str,
         current_profile: dict,
+        ai_config=None,
     ) -> dict[str, Any]:
         session_id = f"profile_chat_{profile_id}"
 
-        agent = self._build_agent(user_id, profile_id)
+        agent = self._build_agent(user_id, profile_id, ai_config=ai_config)
         runner = Runner(
             agent=agent,
             app_name=APP_NAME,
@@ -261,11 +277,12 @@ class ProfileChatService:
         user_id: str,
         message: str,
         current_profile: dict,
+        ai_config=None,
     ) -> AsyncGenerator[dict, None]:
         """Like chat() but yields SSE-friendly events as they happen."""
         session_id = f"profile_chat_{profile_id}"
 
-        agent = self._build_agent(user_id, profile_id)
+        agent = self._build_agent(user_id, profile_id, ai_config=ai_config)
         runner = Runner(
             agent=agent,
             app_name=APP_NAME,

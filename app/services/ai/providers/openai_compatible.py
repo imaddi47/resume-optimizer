@@ -1,4 +1,3 @@
-import json
 from logging import getLogger
 from typing import Any
 
@@ -12,9 +11,19 @@ logger = getLogger(__name__)
 
 
 def _schema_to_json_instruction(schema: type[BaseModel]) -> str:
+    """Compact JSON instruction — lists required fields without the full schema
+    to stay within token limits on providers like Groq."""
+    fields = schema.model_fields
+    field_lines = []
+    for name, info in fields.items():
+        annotation = info.annotation
+        type_name = getattr(annotation, "__name__", str(annotation))
+        req = "required" if info.is_required() else "optional"
+        field_lines.append(f'  "{name}": <{type_name}> ({req})')
+    fields_str = ",\n".join(field_lines)
     return (
-        "\n\nYou MUST respond with valid JSON matching this schema exactly:\n"
-        f"```json\n{json.dumps(schema.model_json_schema(), indent=2)}\n```\n"
+        "\n\nYou MUST respond with valid JSON only. "
+        f"Top-level keys:\n{{\n{fields_str}\n}}\n"
         "Respond ONLY with the JSON object, no other text."
     )
 
@@ -83,5 +92,12 @@ class OpenAICompatibleProvider(LLMProvider):
             raise ProviderRateLimitError(f"Rate limit: {e}") from e
         except ProviderError:
             raise
+        except openai.APIStatusError as e:
+            if e.status_code == 413:
+                raise ProviderError(
+                    f"Resume too large for {self.model_id}. "
+                    "Try a model with a larger context window."
+                ) from e
+            raise ProviderError(f"Provider error: {e}") from e
         except Exception as e:
             raise ProviderError(f"Provider error: {e}") from e

@@ -1,4 +1,3 @@
-import json
 from logging import getLogger
 from typing import Any
 
@@ -18,9 +17,19 @@ ANTHROPIC_MODELS = [
 
 
 def _schema_to_json_instruction(schema: type[BaseModel]) -> str:
+    """Compact JSON instruction — lists required fields without the full schema
+    to stay within token limits."""
+    fields = schema.model_fields
+    field_lines = []
+    for name, info in fields.items():
+        annotation = info.annotation
+        type_name = getattr(annotation, "__name__", str(annotation))
+        req = "required" if info.is_required() else "optional"
+        field_lines.append(f'  "{name}": <{type_name}> ({req})')
+    fields_str = ",\n".join(field_lines)
     return (
-        "\n\nYou MUST respond with valid JSON matching this schema exactly:\n"
-        f"```json\n{json.dumps(schema.model_json_schema(), indent=2)}\n```\n"
+        "\n\nYou MUST respond with valid JSON only. "
+        f"Top-level keys:\n{{\n{fields_str}\n}}\n"
         "Respond ONLY with the JSON object, no other text."
     )
 

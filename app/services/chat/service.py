@@ -171,15 +171,33 @@ class ChatService:
             profile_info_json=json.dumps(profile_info, indent=2),
         )
 
+    def _resolve_model(self, ai_config) -> str:
+        """Pick the Gemini model for the ADK Agent.
+
+        ADK only supports Gemini models. If the user configured a Gemini-based
+        provider, use their selected model. Otherwise fall back to the platform
+        flash model.
+        """
+        if ai_config is None:
+            return self.flash_model
+        provider = ai_config.provider
+        if hasattr(provider, "value"):
+            provider = provider.value
+        if provider in ("PLATFORM_GEMINI", "GEMINI"):
+            return ai_config.model_id or self.flash_model
+        # Non-Gemini providers can't work with ADK — fall back to platform Gemini
+        return self.flash_model
+
     def _build_agent(
         self,
         job_description: dict,
         profile_info: dict,
         user_id: str,
         job_id: int,
+        ai_config=None,
     ) -> Agent:
         system_prompt = self._build_system_prompt(job_description, profile_info)
-        model_name = self.flash_model
+        model_name = self._resolve_model(ai_config)
         _job_id = job_id
         _user_id = user_id
 
@@ -202,7 +220,7 @@ class ChatService:
             return llm_response
 
         return Agent(
-            model=self.flash_model,
+            model=model_name,
             name="resume_editor",
             instruction=system_prompt,
             tools=[get_resume, edit_resume],
@@ -217,10 +235,11 @@ class ChatService:
         job_description: dict,
         profile_info: dict,
         current_resume: dict,
+        ai_config=None,
     ) -> dict[str, Any]:
         session_id = f"job_chat_{job_id}"
 
-        agent = self._build_agent(job_description, profile_info, user_id, job_id)
+        agent = self._build_agent(job_description, profile_info, user_id, job_id, ai_config=ai_config)
         runner = Runner(
             agent=agent,
             app_name=APP_NAME,
@@ -286,11 +305,12 @@ class ChatService:
         job_description: dict,
         profile_info: dict,
         current_resume: dict,
+        ai_config=None,
     ) -> AsyncGenerator[dict, None]:
         """Like chat() but yields SSE-friendly events as they happen."""
         session_id = f"job_chat_{job_id}"
 
-        agent = self._build_agent(job_description, profile_info, user_id, job_id)
+        agent = self._build_agent(job_description, profile_info, user_id, job_id, ai_config=ai_config)
         runner = Runner(
             agent=agent,
             app_name=APP_NAME,
