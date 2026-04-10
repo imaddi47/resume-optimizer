@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = ""  # ADK reads this env var for Google AI API auth
     GEMINI_FLASH_MODEL: str = "gemini-3-flash-preview"
     GEMINI_PRO_MODEL: str = "gemini-3.1-pro-preview"
+    ENCRYPTION_KEY: str = ""  # Fernet key for encrypting user API keys
 
     # Auth
     GOOGLE_CLIENT_ID: str = ""
