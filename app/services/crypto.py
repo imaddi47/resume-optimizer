@@ -1,12 +1,5 @@
 from cryptography.fernet import Fernet
-
-# Import get_settings only if it hasn't already been set in this module's namespace.
-# This pattern allows unittest.mock.patch("app.services.crypto.get_settings") to
-# survive an importlib.reload() call made inside the patch context.
-try:
-    get_settings  # type: ignore[used-before-def]  # noqa: F821
-except NameError:
-    from app.config import get_settings  # noqa: F401
+from app.config import get_settings
 
 
 def _get_fernet() -> Fernet:
