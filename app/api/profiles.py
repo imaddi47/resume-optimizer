@@ -2,10 +2,12 @@ import asyncio
 import math
 from logging import getLogger
 from fastapi import APIRouter, Depends, UploadFile, File, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.session import get_db
 from app.main import create_tracked_task
 from app.models.user import User
+from app.models.ai_config import UserAIConfig
 from app.dependencies import get_current_user
 from app.services.profile.service import ProfileService
 from app.services.storage.gcs import GCSClient
@@ -26,6 +28,12 @@ async def upload_profile(
     pdf_bytes = await file.read()
     profile_id = await service.create_profile(db, current_user.id, pdf_bytes)
 
+    # Query user's AI config
+    ai_config_result = await db.execute(
+        select(UserAIConfig).where(UserAIConfig.user_id == current_user.id)
+    )
+    ai_config = ai_config_result.scalar_one_or_none()
+
     # Fast-path: extract text immediately (pdfplumber is near-instant)
     # so the frontend can animate through the content while AI structures in background
     extracted_text = await service.extract_text_fast(pdf_bytes)
@@ -35,7 +43,7 @@ async def upload_profile(
 
     async def _process():
         async with async_session_factory() as bg_db:
-            await service.process_profile(bg_db, profile_id, pdf_bytes, extracted_text=extracted_text)
+            await service.process_profile(bg_db, profile_id, pdf_bytes, extracted_text=extracted_text, ai_config=ai_config)
 
     create_tracked_task(_process())
 
@@ -125,7 +133,11 @@ async def enhance_profile(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    profile = await service.enhance_profile(db, profile_id, current_user.id)
+    ai_config_result = await db.execute(
+        select(UserAIConfig).where(UserAIConfig.user_id == current_user.id)
+    )
+    ai_config = ai_config_result.scalar_one_or_none()
+    profile = await service.enhance_profile(db, profile_id, current_user.id, ai_config=ai_config)
     return {"id": profile.id, "resume_info": profile.resume_info}
 
 

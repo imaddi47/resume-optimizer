@@ -3,11 +3,13 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.session import get_db
 from app.main import create_tracked_task
 from app.models.job import JobStatus
 from app.models.user import User
+from app.models.ai_config import UserAIConfig
 from app.dependencies import get_current_user
 from app.services.job.service import JobService
 from app.services.credit.service import CreditService
@@ -106,6 +108,12 @@ async def generate_resume(
     job.status = JobStatus.GENERATING_RESUME
     await db.commit()
 
+    # Query user's AI config before dispatching background task
+    ai_config_result = await db.execute(
+        select(UserAIConfig).where(UserAIConfig.user_id == current_user.id)
+    )
+    ai_config = ai_config_result.scalar_one_or_none()
+
     from app.database.session import async_session_factory
 
     user_id = current_user.id
@@ -114,7 +122,7 @@ async def generate_resume(
         async with async_session_factory() as bg_db:
             phase1_succeeded = False
             try:
-                await service.generate_custom_resume(bg_db, job_id, user_id)
+                await service.generate_custom_resume(bg_db, job_id, user_id, ai_config=ai_config)
                 phase1_succeeded = True
                 # Auto-chain: if Phase 1 succeeded, immediately run Phase 2
                 job = await service.get_job(bg_db, job_id, user_id)
